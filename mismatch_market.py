@@ -4,8 +4,8 @@ On man-coverage dropbacks (2021 Weeks 1-8), do defenses put linebackers on the
 tight ends and running backs who beat linebackers?
 
 Run from anywhere:  python3 mismatch_market.py
-Writes outputs/1_market.png, 2_defenses.png, 3_adjust.png, 4_play.png,
-outputs/players.csv and outputs/epa_by_matchup.csv. The slow step (matching every
+Writes outputs/1_market.png, 2_defenses.png, 3_adjust.png, 4_play.png, 4_play.gif, 5_alignment.png,
+outputs/players.csv, alignment.csv and epa_by_matchup.csv. The slow step (matching every
 route runner to a coverage defender across 122 tracking files) is cached in
 cache/matchups.pkl; delete that file to rebuild it. EPA comes from
 external/nflverse_epa_2021.csv, downloaded from nflverse only if it is missing.
@@ -147,10 +147,86 @@ def player_table(k):
     g = k.groupby(['nflId', 'name', 'pos']).agg(
         n=('lb', 'size'), n_lb=('lb', 'sum'),
         lb_rate=('lb', 'mean'), exp_lb=('exp_lb', 'mean')).reset_index()
-    g = g.merge(k[k.lb == 1].groupby('nflId').soe.mean().rename('punish'), on='nflId', how='left')
+    lb_soe = k[k.lb == 1].groupby('nflId').soe
+    g = g.merge(lb_soe.mean().rename('punish'), on='nflId', how='left')
+    g = g.merge((lb_soe.std() / np.sqrt(lb_soe.size())).rename('punish_se'), on='nflId', how='left')
     g['respect'] = g.exp_lb - g.lb_rate
     g['qualified'] = (g.n >= MIN_SNAPS) & (g.n_lb >= MIN_LB_SNAPS)
     return g
+
+
+def reliability(k, q, n_iter=200):
+    """Split-half reliability: do two random halves of a player's routes give him the same number?
+
+    Returns the average correlation between halves for (Respect, Punishment). Near 1 = a stable
+    trait of the player; near 0 = mostly noise at this sample size.
+    """
+    kq = k[k.nflId.isin(q.nflId)]
+    rng = np.random.default_rng(0)
+    out = []
+    for _ in range(n_iter):
+        half = rng.random(len(kq)) < 0.5
+        a = player_table(kq[half]).set_index('nflId')
+        b = player_table(kq[~half]).set_index('nflId')
+        j = a.join(b, lsuffix='_a', rsuffix='_b', how='inner')
+        jp = j[(j.n_lb_a >= 4) & (j.n_lb_b >= 4)]
+        out.append((j.respect_a.corr(j.respect_b), jp.punish_a.corr(jp.punish_b)))
+    return np.mean(out, axis=0)
+
+
+def boot_diff(a, b, rng, n_boot=2000):
+    """Mean(a) - mean(b) with a 95% bootstrap interval."""
+    boots = [rng.choice(a, len(a)).mean() - rng.choice(b, len(b)).mean() for _ in range(n_boot)]
+    return (a.mean() - b.mean(), *np.percentile(boots, [2.5, 97.5]))
+
+
+def alignment_table(k):
+    """Tight ends by alignment: how often a linebacker covers him, and the linebacker's cost in yards."""
+    te = k[k['pos'] == 'TE']
+    rng = np.random.default_rng(0)
+    rows = []
+    for al in ('inline', 'slot', 'wide', 'all'):
+        d = te if al == 'all' else te[te['align'] == al]
+        lb, db = d[d.lb == 1].sep.values, d[d.lb == 0].sep.values
+        edge, lo, hi = boot_diff(lb, db, rng)
+        rows.append(dict(align=al, routes=len(d), lb_rate=d.lb.mean(), sep_lb=lb.mean(), sep_db=db.mean(),
+                         edge=edge, ci_low=lo, ci_high=hi))
+    return pd.DataFrame(rows).set_index('align')
+
+
+def plot_alignment(t, path):
+    t = t.drop(index='all')
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 5.5))
+    a1.bar(t.index, t.lb_rate, color=COLORS['TE'], alpha=0.85, width=0.6)
+    for i, (al, row) in enumerate(t.iterrows()):
+        a1.text(i, row.lb_rate + 0.01, f'{row.lb_rate:.0%}', ha='center', fontsize=13, fontweight='bold')
+        a1.text(i, 0.012, f'{row.routes:.0f} routes', ha='center', fontsize=9, color='white')
+    a1.set_ylim(0, t.lb_rate.max() * 1.25)
+    a1.set_yticks([])
+    a1.set_title('How often a linebacker covers him', fontsize=11, loc='left')
+    a2.bar(t.index, t.edge, color='#d62728', alpha=0.85, width=0.6,
+           yerr=[t.edge - t.ci_low, t.ci_high - t.edge], error_kw=dict(ecolor='0.25', capsize=5, lw=1.2))
+    for i, (al, row) in enumerate(t.iterrows()):
+        a2.text(i, row.ci_high + 0.02, f'+{row.edge:.2f} yd', ha='center', va='bottom', fontsize=12,
+                fontweight='bold')
+    a2.axhline(0, color='0.3', lw=0.8)
+    a2.set_ylim(0, t.ci_high.max() * 1.15)
+    a2.set_ylabel('Extra separation vs a linebacker (yards)')
+    a2.set_title('What the linebacker costs the defense\n(separation vs LB minus vs DB, 95% interval)',
+                 fontsize=11, loc='left')
+    for ax in (a1, a2):
+        ax.spines[['top', 'right']].set_visible(False)
+        ax.tick_params(axis='x', labelsize=12)
+    a1.spines['left'].set_visible(False)
+    fig.suptitle('Offenses can buy the mismatch: a tight end lined up inline draws a linebacker far more often,\n'
+                 'and the linebacker gives up extra space from every alignment',
+                 fontsize=13, fontweight='bold', x=0.01, ha='left')
+    fig.text(0.01, -0.02, 'Tight ends on man-coverage routes, 2021 Weeks 1-8. Inline = next to the tackle; '
+             'slot = between the line and the widest receiver; wide = widest receiver.',
+             fontsize=8, color='0.35', va='top')
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
 
 # ------------------------------------------------------------- chart helpers
@@ -188,7 +264,7 @@ def annotate_players(ax, df, x, y, fontsize=8):
 
 
 # ------------------------------------------------------- Step 5: the market
-def plot_market(q, g, r, r_no_blockers, path):
+def plot_market(q, g, r, r_no_blockers, rel, path):
     fig, ax = plt.subplots(figsize=(11, 8))
     xl = q.respect.abs().max() * 1.2
     yl = q.punish.abs().max() * 1.15
@@ -205,6 +281,7 @@ def plot_market(q, g, r, r_no_blockers, path):
 
     for p, c in COLORS.items():
         s = q[q.pos == p]
+        ax.errorbar(s.respect, s.punish, yerr=s.punish_se, fmt='none', ecolor=c, alpha=0.25, lw=1, zorder=2)
         ax.scatter(s.respect, s.punish, s=s.n_lb * 6, color=c, alpha=0.7,
                    edgecolor='white', lw=0.8, label=f'{p} ({len(s)})', zorder=3)
     # name only the clear winners in the shaded corner; naming all of them piles labels on the dots
@@ -232,10 +309,13 @@ def plot_market(q, g, r, r_no_blockers, path):
     ax.set_ylabel('Punishment: extra yards of separation vs linebackers')
     ax.set_title(f"Defenses don't steer linebackers away from the TEs and RBs who beat them (r = {r:.2f})",
                  fontsize=13, fontweight='bold', loc='left')
-    ax.text(0, -0.1, f'Each dot is a TE or RB with {MIN_SNAPS}+ man-coverage routes and {MIN_LB_SNAPS}+ linebacker '
+    ax.text(0, -0.09, f'Each dot is a TE or RB with {MIN_SNAPS}+ man-coverage routes and {MIN_LB_SNAPS}+ linebacker '
             'matchups, 2021 Weeks 1-8. Separation = yards to the nearest coverage defender at the throw,\n'
             'compared with the average for his position and alignment (inline, slot, wide, backfield). '
-            f'Matchups inferred from tracking data. Without the blocking TE, r = {r_no_blockers:.2f}.',
+            f'Matchups inferred from tracking data. Without the blocking TE, r = {r_no_blockers:.2f}.\n'
+            f'Vertical bars = 1 standard error. Split-half reliability: Respect {rel[0]:.2f} (a stable trait), '
+            f'Punishment {rel[1]:.2f} (noisy for one player over 8 weeks): read the green corner as candidates, '
+            'not a ranking.',
             transform=ax.transAxes, fontsize=8, color='0.35', va='top')
     fig.savefig(path, dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -446,6 +526,74 @@ def plot_play(row, path):
     plt.close(fig)
 
 
+def animate_play(row, path, lead=8, tail=18, hold=12):
+    """The same play as a GIF: snap to throw plus the ball in the air, with a live separation readout."""
+    from matplotlib.animation import FuncAnimation, PillowWriter
+
+    t = pd.read_csv(os.path.join(DATA, 'tracking', f'tracking_{row.gameId}.csv'))
+    t = t[t.playId == row.playId].copy()
+    if t.playDirection.iloc[0] == 'left':
+        t['x'] = 120 - t.x
+        t['y'] = 53.3 - t.y
+    s, e = int(row.snap_frame), int(row.end_frame)
+    first, last = max(t.frameId.min(), s - lead), min(t.frameId.max(), e + tail)
+    t = t[t.frameId.between(first, last)]
+    los = t[(t.team == 'football') & (t.frameId == s)].x.iloc[0]
+    men = t[t.team != 'football']
+    by_frame = {f: d for f, d in t.groupby('frameId')}
+    rec = t[t.nflId == row.nflId].set_index('frameId')
+    dfn = t[t.nflId == row.defId].set_index('frameId')
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    ax.set_facecolor('#eaf4ea')
+    for yard in range(10, 111, 5):
+        ax.axvline(yard, color='white', lw=1.5 if yard % 10 == 0 else 0.8, zorder=0)
+    ax.axvline(los, color='#1f3b73', lw=2, zorder=1)
+    ax.set_xlim(max(0, los - 14), min(120, max(los + 26, men.x.max() + 3)))    # landscape, like the still
+    ax.set_ylim(max(0, men.y.min() - 3), min(53.3, men.y.max() + 3))
+    ax.set_aspect('equal')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    off = ax.scatter([], [], s=70, color='#1f77b4', edgecolor='white', zorder=3, label=f'{row.possessionTeam} offense')
+    dfs = ax.scatter([], [], s=70, color='0.55', edgecolor='white', zorder=3, label=f'{row.defensiveTeam} defense')
+    ball = ax.scatter([], [], s=35, color='#8b4513', zorder=6, label='ball')
+    trail_r, = ax.plot([], [], color='#ff7f0e', lw=2.5, zorder=2)
+    trail_d, = ax.plot([], [], color='#d62728', lw=2.5, zorder=2)
+    link, = ax.plot([], [], color='black', ls='--', lw=1.2, zorder=4)
+    dot_r = ax.scatter([], [], s=220, color='#ff7f0e', edgecolor='black', lw=1.5, zorder=5,
+                       label=f'{row["name"]} ({row.pos})')
+    dot_d = ax.scatter([], [], s=220, color='#d62728', edgecolor='black', lw=1.5, zorder=5,
+                       label=f'{row.dname} ({row.dpos})')
+    readout = ax.text(0.5, 0.96, '', transform=ax.transAxes, ha='center', va='top', fontsize=13,
+                      fontweight='bold', bbox=dict(boxstyle='round', fc='white', ec='0.6', alpha=0.95), zorder=7)
+    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.13), ncol=5, frameon=False, fontsize=8,
+              handletextpad=0.2, columnspacing=1.0)
+    ax.set_title(f'Week {row.week}, {row.possessionTeam} vs {row.defensiveTeam}: a linebacker on {row["name"]} '
+                 f'in man coverage\n{textwrap.fill(row.playDescription, 90)}', fontsize=9, loc='left')
+
+    def draw(f):
+        f = min(f, last)                                   # extra frames hold the final picture
+        d = by_frame[f]
+        off.set_offsets(d[d.team == row.possessionTeam][['x', 'y']].values)
+        dfs.set_offsets(d[d.team == row.defensiveTeam][['x', 'y']].values)
+        ball.set_offsets(d[d.team == 'football'][['x', 'y']].values)
+        r, q = rec.loc[f], dfn.loc[f]
+        since = max(f, s)                                  # trails start at the snap
+        trail_r.set_data(rec.loc[s:since].x, rec.loc[s:since].y)
+        trail_d.set_data(dfn.loc[s:since].x, dfn.loc[s:since].y)
+        link.set_data([r.x, q.x], [r.y, q.y])
+        dot_r.set_offsets([[r.x, r.y]])
+        dot_d.set_offsets([[q.x, q.y]])
+        gap = np.hypot(r.x - q.x, r.y - q.y)
+        phase = 'pre-snap' if f < s else f'{(f - s) / 10:.1f} s after snap' if f <= e else 'ball in the air'
+        readout.set_text(f'{phase}   |   separation {gap:.1f} yd')
+        return off, dfs, ball, trail_r, trail_d, link, dot_r, dot_d, readout
+
+    frames = list(range(first, last + 1)) + [last] * hold
+    FuncAnimation(fig, draw, frames=frames, blit=False).save(path, writer=PillowWriter(fps=10), dpi=80)
+    plt.close(fig)
+
+
 # ------------------------------------------------------- Step 8: EPA per target
 def load_epa(plays):
     if not os.path.exists(EPA_FILE):
@@ -541,7 +689,16 @@ def main():
     q_nb = q[~q.name.isin(KNOWN_BLOCKERS)]
     r_nb = q_nb.respect.corr(q_nb.punish)
     print(f'    corr without known blocking TEs = {r_nb:.3f}')
-    plot_market(q, g, r, r_nb, os.path.join(OUT, '1_market.png'))
+    rel = reliability(k, q)
+    print(f'    split-half reliability: Respect {rel[0]:.2f}, Punishment {rel[1]:.2f}')
+    plot_market(q, g, r, r_nb, rel, os.path.join(OUT, '1_market.png'))
+
+    # Step 5b: the robust league-level version, by alignment
+    al = alignment_table(k)
+    al.round(3).to_csv(os.path.join(OUT, 'alignment.csv'))
+    print('[5b] tight ends by alignment (edge = separation vs LB minus vs DB, 95% bootstrap interval):\n'
+          + al.round(2).to_string())
+    plot_alignment(al, os.path.join(OUT, '5_alignment.png'))
 
     # Step 6: grading the defenses
     d = defense_table(k)
@@ -565,6 +722,7 @@ def main():
     if len(cand):
         row = cand.iloc[0]
         plot_play(row, os.path.join(OUT, '4_play.png'))
+        animate_play(row, os.path.join(OUT, '4_play.gif'))
         print(f'[7] play: {row["name"]} vs {row.dname} ({row.dpos}), game {row.gameId} play {row.playId}, '
               f'{row.playResult} yds, sep {row.sep:.1f} yd')
     else:
