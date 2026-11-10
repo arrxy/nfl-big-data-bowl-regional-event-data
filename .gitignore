@@ -1,3 +1,4 @@
 *.pdf
 cache/
 __pycache__/
+.playwright-mcp/

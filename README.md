@@ -2,6 +2,8 @@
 
 > A linebacker on a tight end costs the defense 0.4 yards of separation and 0.36 expected points per target. Offenses can buy that matchup by lining the tight end up inline, and defenses are not steering linebackers away from the players who win it.
 
+**[Open the interactive explorer](https://arrxy.github.io/nfl-big-data-bowl-regional-event-data/)**: hover any player for his scouting card, pick a defense to see where it puts linebackers, and play the example snap frame by frame (source: `docs/index.html`).
+
 ![Offenses can buy the mismatch](outputs/5_alignment.png)
 
 **What it is.** Mismatch Market grades the defense's man-coverage matchup choices: for each tight end and running back it measures *Respect* (how much less often than normal he draws a linebacker) and *Punishment* (how much extra separation he gets when he does), so an offensive coordinator sees which matchups to hunt, a defensive coordinator sees which to stop calling, and a broadcaster gets a one-line graphic.
@@ -24,10 +26,11 @@
 python3 mismatch_market.py
 ```
 
-Needs pandas, numpy, scipy and matplotlib (with Pillow, for the GIF); takes about 10 seconds. It rebuilds `cache/matchups.pkl` from the tracking files if the cache is missing, and reads EPA from `external/nflverse_epa_2021.csv`, which it downloads from nflverse only if that file is missing. Column definitions for the provided data are in [DATA.md](DATA.md).
+Needs pandas, numpy, scipy and matplotlib (with Pillow, for the GIF); takes about 10 seconds. Then `python3 interactive.py` (needs plotly) rebuilds the interactive page at `docs/index.html`. It rebuilds `cache/matchups.pkl` from the tracking files if the cache is missing, and reads EPA from `external/nflverse_epa_2021.csv`, which it downloads from nflverse only if that file is missing. Column definitions for the provided data are in [DATA.md](DATA.md).
 
 ## Outputs (`outputs/`)
 
+- `docs/index.html`: the interactive explorer (player scouting cards, defense picker, animated play).
 - `5_alignment.png`, `alignment.csv`: tight ends by alignment, how often a linebacker covers him and what it costs (top chart).
 - `1_market.png`: Respect vs Punishment for 67 TEs and RBs, with standard-error bars.
 - `4_play.gif`, `4_play.png`: Joe Mixon's 40-yard touchdown against Lions OLB Trey Flowers in man coverage.
