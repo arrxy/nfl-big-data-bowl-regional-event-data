@@ -26,7 +26,7 @@
 python3 mismatch_market.py
 ```
 
-Needs pandas, numpy, scipy and matplotlib (with Pillow, for the GIF); takes about 10 seconds. Then `python3 interactive.py` (needs plotly) rebuilds the interactive page at `docs/index.html`. It rebuilds `cache/matchups.pkl` from the tracking files if the cache is missing, and reads EPA from `external/nflverse_epa_2021.csv`, which it downloads from nflverse only if that file is missing. Column definitions for the provided data are in [DATA.md](DATA.md).
+Needs pandas, numpy, scipy and matplotlib (with Pillow, for the GIF); takes about 10 seconds. Then `python3 interactive.py` rebuilds the interactive page at `docs/index.html` (plain HTML and SVG, no extra libraries). It rebuilds `cache/matchups.pkl` from the tracking files if the cache is missing, and reads EPA from `external/nflverse_epa_2021.csv`, which it downloads from nflverse only if that file is missing. Column definitions for the provided data are in [DATA.md](DATA.md).
 
 ## Outputs (`outputs/`)
 
