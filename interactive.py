@@ -10,6 +10,7 @@ and SVG with no JavaScript libraries. Three tools:
   2. a defense picker: where does this defense put linebackers on TEs and RBs?
   3. the example play, animated, with a live separation readout.
 """
+import functools
 import json
 import math
 import os
@@ -37,20 +38,39 @@ def load():
     return k, mm.player_table(k)
 
 
+def best_play(k, name):
+    """A player's longest completed catch against a linebacker, or None.
+
+    Plays where the matched linebacker is also the nearest defender at the throw come first:
+    on the others the inferred matchup is doubtful.
+    """
+    rows = mm.pick_play(k, name)
+    if rows.empty:
+        return None
+    clean = rows[rows.sep_assigned - rows.sep < 0.3]
+    return (clean if len(clean) else rows).sort_values(['playResult', 'sep'], ascending=False).iloc[0]
+
+
+@functools.lru_cache(maxsize=None)
+def game_tracking(game_id):
+    return pd.read_csv(os.path.join(mm.DATA, 'tracking', f'tracking_{game_id}.csv'),
+                       usecols=['playId', 'nflId', 'frameId', 'team', 'playDirection', 'x', 'y'])
+
+
 def player_data(k, q):
     out = []
     for _, r in q.iterrows():
         d = k[k.nflId == r.nflId]
         by_align = [dict(a=a, n=len(x), lb=num(x.lb.mean()), sep=num(x[x.lb == 1].sep.mean(), 1))
                     for a, x in d.groupby('align') if len(x) >= 3]
-        best = mm.pick_play(k, r['name']).head(1)
+        best = best_play(k, r['name'])
         out.append(dict(
             name=r['name'], pos=r.pos, team=d.possessionTeam.mode().iat[0], n=int(r.n), n_lb=int(r.n_lb),
             lb_rate=num(r.lb_rate), exp_lb=num(r.exp_lb), respect=num(r.respect), punish=num(r.punish),
             se=num(r.punish_se), align=by_align, blocker=r['name'] in mm.KNOWN_BLOCKERS,
             label=bool((r.respect < 0 and r.punish >= 0.5) or abs(r.respect) >= 0.2),
-            best=None if best.empty else dict(week=int(best.iloc[0].week), dname=best.iloc[0].dname,
-                                              desc=best.iloc[0].playDescription)))
+            best=None if best is None else dict(week=int(best.week), dname=best.dname,
+                                                desc=best.playDescription)))
     return out
 
 
@@ -68,7 +88,7 @@ def defense_data(k):
 
 
 def play_data(row, lead=8, tail=18):
-    t = pd.read_csv(os.path.join(mm.DATA, 'tracking', f'tracking_{row.gameId}.csv'))
+    t = game_tracking(int(row.gameId))
     t = t[t.playId == row.playId].copy()
     if t.playDirection.iloc[0] == 'left':
         t['x'], t['y'] = 120 - t.x, 53.3 - t.y
@@ -77,9 +97,11 @@ def play_data(row, lead=8, tail=18):
     t = t[t.frameId.between(first, last)]
     los = float(t[(t.team == 'football') & (t.frameId == s)].x.iloc[0])
     men = t[t.team != 'football']
-    xy = lambda d: [[round(a, 2), round(b, 2)] for a, b in zip(d.x, d.y)]                    # noqa: E731
+    xy = lambda d: [[round(a, 1), round(b, 1)] for a, b in zip(d.x, d.y)]                    # noqa: E731
     frames = []
     for f, d in t.groupby('frameId'):
+        if not ((d.nflId == row.nflId).any() and (d.nflId == row.defId).any()):
+            continue                                     # a tracking gap for either player
         r, q = d[d.nflId == row.nflId].iloc[0], d[d.nflId == row.defId].iloc[0]
         others = d[~d.nflId.isin([row.nflId, row.defId])]
         frames.append(dict(
@@ -103,9 +125,15 @@ def main():
     q = g[g.qualified]
     al = mm.alignment_table(k)
     corner = q[(q.respect < 0) & (q.punish > 0)].sort_values('punish', ascending=False)
-    row = mm.choose_play(k, corner.name).iloc[0]
+    headline = mm.choose_play(k, corner.name).iloc[0]            # the play the page opens on
+    plays = {}
+    for name in q.name:                                           # every player's own best catch
+        row = headline if name == headline['name'] else best_play(k, name)
+        if row is not None:
+            plays[name] = play_data(row)
     data = dict(
-        players=player_data(k, q), defense=defense_data(k), play=play_data(row), start=DEFAULT_PLAYER, repo=REPO,
+        players=player_data(k, q), defense=defense_data(k), plays=plays, play_start=headline['name'],
+        start=DEFAULT_PLAYER, repo=REPO,
         stats=dict(edge=num(al.loc['all', 'edge'], 2), lo=num(al.loc['all', 'ci_low'], 2),
                    hi=num(al.loc['all', 'ci_high'], 2), inline=num(al.loc['inline', 'lb_rate'], 2),
                    wide=num(al.loc['wide', 'lb_rate'], 2), r=num(q.respect.corr(q.punish), 2), n=len(q),
@@ -116,7 +144,7 @@ def main():
     with open(path, 'w', encoding='utf-8') as f:
         f.write(page)
     print(f'Wrote {path} ({os.path.getsize(path) / 1024:.0f} KB): {len(q)} players, '
-          f'{len(data["defense"]["teams"])} defenses, {len(data["play"]["frames"])} play frames')
+          f'{len(data["defense"]["teams"])} defenses, {len(plays)} animated plays')
 
 
 PAGE = r'''<!doctype html>
@@ -212,6 +240,10 @@ input[type=range] { width:100%; accent-color:var(--red); margin:10px 0 12px; }
 .play-btn { width:100%; background:var(--navy); color:#fff; border:0; padding:14px; font-size:15px; }
 .play-btn:hover { background:#123a7d; }
 button:focus-visible, .play-btn:focus-visible, input:focus-visible { outline:3px solid var(--gold); outline-offset:2px; }
+.picker { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+select { font:600 14px var(--sans); color:var(--navy); background:#fff; border:2px solid var(--navy); padding:8px 10px; }
+.watch { width:100%; margin-top:16px; background:var(--red); color:#fff; border:0; padding:11px; font:600 13px var(--sans); cursor:pointer; }
+.watch:hover { background:#b0141a; }
 footer { margin-top:70px; border-top:3px solid var(--ink); padding-top:18px; font-size:13px; color:#333a47; max-width:900px; }
 footer a { font-family:var(--mono); font-size:12px; color:var(--navy); font-weight:500; }
 @media (max-width: 920px) { .split, .dsplit, .psplit { grid-template-columns:1fr; } .scout { position:static; }
@@ -244,7 +276,7 @@ footer a { font-family:var(--mono); font-size:12px; color:var(--navy); font-weig
     <aside class="card scout" id="scout" aria-live="polite"></aside>
   </div>
   <p class="note">Bars are one standard error. One player's Punishment over eight weeks is noisy, so read the corner as candidates,
-  not a ranking. Hover, tap or tab through the dots to swap players.</p>
+  not a ranking. Hover a dot to preview a player; click, tap or tab to it to pin his card.</p>
 </section>
 
 <section>
@@ -258,10 +290,11 @@ footer a { font-family:var(--mono); font-size:12px; color:var(--navy); font-weig
   </div>
 </section>
 
-<section>
+<section id="play-sec">
   <div class="head"><span class="no">03</span><div><h2>What it looks like</h2>
-    <p>One completed pass from the shaded corner, with the matched defender highlighted and the separation updating every tenth
-    of a second.</p></div></div>
+    <p>Each player's longest completed catch against a linebacker, with the matched defender highlighted and the separation
+    updating every tenth of a second. Pick a player here, or press "Watch this play" on a scouting card.</p></div></div>
+  <div class="picker"><label class="cap" for="pick">Pick a player</label><select id="pick"></select></div>
   <p class="ptitle" id="ptitle"></p><div class="mono" id="pdesc"></div>
   <div class="psplit">
     <div><div class="field" id="field"></div><div class="legend" id="plegend"></div></div>
@@ -336,8 +369,9 @@ function drawScatter() {
     g += `<g class="pt ${p.pos}" data-i="${i}" tabindex="0" role="button" aria-label="${esc(p.name)}, ${p.pos}, respect ${p.respect.toFixed(2)}, punishment ${p.punish.toFixed(2)} yards">
       <line class="eb" x1="${x}" x2="${x}" y1="${y1}" y2="${y2}" stroke="#b9bfca"/><circle cx="${x}" cy="${y}" r="${r.toFixed(1)}" fill="${COL[p.pos]}"/></g>`; }
   $('scatter').innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="group" aria-label="Respect versus Punishment for ${D.players.length} players">${g}${labels}</svg>`;
-  for (const el of document.querySelectorAll('.pt')) { const pick = () => selectPlayer(+el.dataset.i);
-    el.addEventListener('mouseenter', pick); el.addEventListener('focus', pick); el.addEventListener('click', pick); }
+  for (const el of document.querySelectorAll('.pt')) { const i = +el.dataset.i, pin = () => { pinned = i; selectPlayer(i); };
+    el.addEventListener('mouseenter', () => selectPlayer(i)); el.addEventListener('focus', pin); el.addEventListener('click', pin); }
+  $('scatter').addEventListener('mouseleave', () => selectPlayer(pinned));     // hover was only a preview
 }
 function selectPlayer(i) {
   const p = D.players[i];
@@ -352,7 +386,9 @@ function selectPlayer(i) {
     <div class="meter"><i style="width:${p.lb_rate * 100}%"></i><u style="left:${p.exp_lb * 100}%"></u></div>
     <div class="small">Normal for his alignment: <b>${pct(p.exp_lb)}</b> · ${p.n} routes, ${p.n_lb} vs LB</div>
     <hr><div class="cap">By alignment · routes, linebacker rate, space vs LB</div><ul style="white-space:pre">${align}</ul>
-    ${p.best ? `<hr><div class="cap">Best catch vs a linebacker</div><div class="mono" style="margin-top:6px">Week ${p.best.week} · vs ${esc(p.best.dname)}</div><p class="quote">${esc(p.best.desc)}</p>` : ''}`;
+    ${p.best ? `<hr><div class="cap">Best catch vs a linebacker</div><div class="mono" style="margin-top:6px">Week ${p.best.week} · vs ${esc(p.best.dname)}</div><p class="quote">${esc(p.best.desc)}</p>` : ''}
+    ${D.plays[p.name] ? '<button class="watch" id="watch">▶ Watch this play</button>' : ''}`;
+  if ($('watch')) $('watch').addEventListener('click', () => { loadPlay(p.name); $('play-sec').scrollIntoView({behavior: 'smooth'}); });
 }
 function setTab(pos) {
   for (const b of $('tabs').children) b.setAttribute('aria-pressed', b.dataset.pos === pos);
@@ -362,8 +398,9 @@ const count = pos => D.players.filter(p => p.pos === pos).length;
 $('tabs').innerHTML = [['all', `All · ${D.players.length}`], ['TE', `Tight ends · ${count('TE')}`], ['RB', `Running backs · ${count('RB')}`]]
   .map(([k, t]) => `<button data-pos="${k}" aria-pressed="${k === 'all'}">${t}</button>`).join('');
 for (const b of $('tabs').children) b.addEventListener('click', () => setTab(b.dataset.pos));
+let pinned = Math.max(0, D.players.findIndex(p => p.name === D.start));
 drawScatter();
-selectPlayer(Math.max(0, D.players.findIndex(p => p.name === D.start)));
+selectPlayer(pinned);
 
 /* ---------- 2. defense ---------- */
 const TEAMS = Object.keys(D.defense.teams).sort();
@@ -395,9 +432,11 @@ for (const b of $('teams').children) b.addEventListener('click', () => selectTea
 selectTeam(D.defense.start);
 
 /* ---------- 3. play ---------- */
-const P = D.play, S = 14, FW = (P.x1 - P.x0) * S, FH = (P.y1 - P.y0) * S;
+const S = 14, NAMES = Object.keys(D.plays).sort();
+let P, FH, cur = 0, timer = null;
 const fx = x => (x - P.x0) * S, fy = y => (P.y1 - y) * S;
-(function drawField() {
+function drawField() {
+  const FW = (P.x1 - P.x0) * S; FH = (P.y1 - P.y0) * S;
   let g = '';
   for (let x = P.x0; x < P.x1; x += 5) g += `<rect x="${fx(x)}" y="0" width="${5 * S}" height="${FH}" fill="${(x / 5) % 2 ? '#2f7d32' : '#388e3c'}"/>`;
   for (let x = P.x0; x <= P.x1; x += 5) { g += `<line x1="${fx(x)}" x2="${fx(x)}" y1="0" y2="${FH}" stroke="#fff" stroke-opacity=".75" stroke-width="${x % 10 ? 1 : 2}"/>`;
@@ -407,15 +446,12 @@ const fx = x => (x - P.x0) * S, fy = y => (P.y1 - y) * S;
   for (const h of [23.58, 29.72]) if (h > P.y0 && h < P.y1) for (let x = P.x0 + 1; x < P.x1; x++) g += `<line x1="${fx(x)}" x2="${fx(x)}" y1="${fy(h) - 4}" y2="${fy(h) + 4}" stroke="#fff" stroke-opacity=".6"/>`;
   g += `<line x1="${fx(P.los)}" x2="${fx(P.los)}" y1="0" y2="${FH}" stroke="#2f6bff" stroke-width="3"/>
         <rect x="${fx(P.los) + 6}" y="96" width="128" height="18" fill="#2f6bff"/><text x="${fx(P.los) + 12}" y="109" font-size="10.5" font-weight="700" fill="#fff" letter-spacing="1">LINE OF SCRIMMAGE</text>`;
-  $('field').innerHTML = `<svg viewBox="0 0 ${FW} ${FH}" role="img" aria-label="Animated player positions for the example play">${g}<g id="live"></g></svg>`;
+  $('field').innerHTML = `<svg viewBox="0 0 ${FW} ${FH}" role="img" aria-label="Animated player positions: ${esc(P.title)}">${g}<g id="live"></g></svg>`;
   $('ptitle').textContent = P.title; $('pdesc').textContent = P.desc;
   $('plegend').innerHTML = `<span><span class="dot" style="background:#e4572e;border-color:#3b1206"></span>${P.off} offense</span>
     <span><span class="dot" style="background:#fff;border-color:#1565c0"></span>${P.dfn} defense</span><span><span class="dot" style="background:#8b4513;border-color:#3b1206;width:8px;height:8px"></span>Ball</span>
     <span><span class="dot" style="background:#ff6b35;border-color:#fff;outline:2px solid #111"></span>${esc(P.rec_full)}</span><span><span class="dot" style="background:#1565c0;border-color:#d0181f"></span>${esc(P.cov_full)}</span>`;
-})();
-const maxGap = Math.max(...P.frames.map(f => f.gap));
-$('spark').innerHTML = P.frames.map(f => `<i style="height:${Math.max(3, f.gap / maxGap * 100)}%"></i>`).join('');
-$('slider').max = P.frames.length - 1; $('t0').textContent = sgn(P.frames[0].t, 1) + ' s'; $('t1').textContent = sgn(P.frames[P.frames.length - 1].t, 1) + ' s';
+}
 function tagAt(x, y, text, fill, dx) { const w = text.length * 6.6 + 14;
   return `<rect x="${x + dx - (dx < 0 ? w : 0)}" y="${y + 12}" width="${w}" height="18" fill="${fill}"/><text x="${x + dx - (dx < 0 ? w : 0) + 7}" y="${y + 25}" font-size="11" font-weight="700" fill="#fff">${esc(text)}</text>`; }
 function drawFrame(i) {
@@ -435,8 +471,17 @@ function drawFrame(i) {
   $('tnow').textContent = sgn(f.t, 1) + ' s'; $('slider').value = i;
   [...$('spark').children].forEach((el, j) => { el.className = j === i ? 'on' : j < i ? 'past' : ''; });
 }
-let cur = 0, timer = null;
 function stop() { clearInterval(timer); timer = null; $('playbtn').textContent = '▶ Play'; }
+function loadPlay(name) {
+  stop(); P = D.plays[name]; cur = 0; $('pick').value = name;
+  drawField();
+  const maxGap = Math.max(1, ...P.frames.map(f => f.gap));
+  $('spark').innerHTML = P.frames.map(f => `<i style="height:${Math.max(3, f.gap / maxGap * 100)}%"></i>`).join('');
+  $('slider').max = P.frames.length - 1; $('t0').textContent = sgn(P.frames[0].t, 1) + ' s'; $('t1').textContent = sgn(P.frames[P.frames.length - 1].t, 1) + ' s';
+  drawFrame(0);
+}
+$('pick').innerHTML = NAMES.map(n => `<option>${esc(n)}</option>`).join('');
+$('pick').addEventListener('change', e => loadPlay(e.target.value));
 $('playbtn').addEventListener('click', () => {
   if (timer) return stop();
   if (cur >= P.frames.length - 1) cur = 0;
@@ -444,7 +489,7 @@ $('playbtn').addEventListener('click', () => {
   timer = setInterval(() => { cur++; drawFrame(cur); if (cur >= P.frames.length - 1) stop(); }, 100);
 });
 $('slider').addEventListener('input', e => { stop(); cur = +e.target.value; drawFrame(cur); });
-drawFrame(0);
+loadPlay(D.play_start);
 </script>
 </body></html>
 '''
