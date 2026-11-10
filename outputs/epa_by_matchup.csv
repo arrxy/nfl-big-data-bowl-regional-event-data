@@ -1,0 +1,5 @@
+pos,dgrp,targets,epa_per_target,completion,separation,lb_minus_db,ci_low,ci_high
+RB,DB,38,0.25,0.579,3.22,,,
+RB,LB,121,0.083,0.587,3.341,-0.168,-0.784,0.415
+TE,DB,247,0.047,0.506,2.053,,,
+TE,LB,116,0.41,0.698,3.082,0.362,0.025,0.708
