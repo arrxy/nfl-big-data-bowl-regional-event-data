@@ -13,7 +13,7 @@ Every number marked "checkpoint" below was measured on this repo's data with a w
 - One script: `mismatch_market.py` at the repo root. Running `python3 mismatch_market.py` must produce every output with no arguments.
 - Libraries: pandas, numpy, scipy, matplotlib only. All are installed (pandas 2.2.2, scipy 1.14, matplotlib 3.9.1).
 - **pyarrow is not installed.** Cache with `df.to_pickle(...)` / `pd.read_pickle(...)`, not parquet.
-- Do not overwrite `README.md` (it is the data dictionary). The submission write-up goes in `SUBMISSION.md`.
+- The submission write-up is `README.md` (judges read it first). The data dictionary is `DATA.md`.
 - Always join on `(gameId, playId)`. `playId` alone is not unique.
 - There is **no coverage-assignment column** in this dataset. Who covers whom must be inferred from tracking (Step 2).
 - Distances between players do not depend on play direction, so skip direction normalization everywhere except the play picture (Step 7).
@@ -28,7 +28,7 @@ outputs/2_defenses.png  defense bar chart
 outputs/3_adjust.png    did defenses adjust? scatter
 outputs/4_play.png      one real play
 outputs/players.csv     player table
-SUBMISSION.md           3–5 sentence write-up
+README.md           3–5 sentence write-up
 ```
 
 Time budget (3 hours): Steps 1–3 in 45 min, Steps 4–5 in 45 min, Steps 6–7 in 45 min, Step 9 in 15 min, 30 min spare. Step 8 is optional.
@@ -292,7 +292,7 @@ Only if Steps 1–7 and 9 are finished.
 
 ---
 
-## 9. `SUBMISSION.md` (3–5 sentences, fill the blanks from the outputs)
+## 9. `README.md` (3–5 sentences, fill the blanks from the outputs)
 
 > **Finding.** On man-coverage dropbacks in Weeks 1–8 of 2021, tight ends got about 0.4 more yards of separation when a linebacker covered them than when a defensive back did, yet how often a player drew a linebacker was unrelated to how much he beat linebackers (r = __). Players such as __ and __ kept drawing linebackers at or above the normal rate for their alignment while gaining __ extra yards of space, and defenses such as __ gave up the most separation per game this way.
 > **Method.** Man plays come from PFF's coverage tag; each route runner is matched to one coverage defender by minimum average distance from snap to throw (Hungarian assignment), and separation is measured at the throw, capped at 4 seconds, on every route whether or not he was targeted. Respect is the expected linebacker rate for his position and alignment minus his actual rate; Punishment is his separation over expected on linebacker-covered snaps.
@@ -307,7 +307,7 @@ Also add two lines: how to run (`python3 mismatch_market.py`) and the list of fi
 - Delete `cache/` and run `python3 mismatch_market.py` from scratch. It must finish without errors and write all four PNGs and `players.csv`.
 - All `assert`s from Step 4 pass.
 - Open each PNG and check that titles, axis labels and player names are readable and not overlapping.
-- The numbers quoted in `SUBMISSION.md` match `outputs/players.csv`.
+- The numbers quoted in `README.md` match `outputs/players.csv`.
 
 ## If time runs short, cut in this order
 
@@ -315,4 +315,4 @@ Also add two lines: how to run (`python3 mismatch_market.py`) and the list of fi
 2. Chart 3 (did defenses adjust).
 3. Chart 4 (the play picture).
 
-Never cut Chart 1, Chart 2 or `SUBMISSION.md`.
+Never cut Chart 1, Chart 2 or `README.md`.

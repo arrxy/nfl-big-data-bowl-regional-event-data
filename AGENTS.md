@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Data-only starter for the **NFL Big Data Bowl – NYU Edition**, a 3-hour hackathon (brief: `NFL Big Data Bowl - NYU Edition.pdf`; full column dictionary: `README.md`). No code, build, or tests exist yet — anything written here is the submission.
+Data-only starter for the **NFL Big Data Bowl – NYU Edition**, a 3-hour hackathon (brief: `NFL Big Data Bowl - NYU Edition.pdf`; full column dictionary: `DATA.md`; submission write-up: `README.md`). No code, build, or tests exist yet — anything written here is the submission.
 
 **Task:** build, in Python, a visualization/comparison tool or a new metric that surfaces an original insight about **skill positions (TE, WR, RB)**, for a coach, scout, or broadcaster. Submission = code (notebook or .py) + output (viz/screenshot/metric demo) + a 3–5 sentence README covering findings, methods, assumptions, limitations. Judged on: does it run, clear insight, README; then Football Insight > Technical Execution > Originality (must not rehash the 2023 Big Data Bowl, which was pass-rush/pass-block focused) + Communication. Brief's advice: pick ONE question and go deep.
 
